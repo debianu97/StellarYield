@@ -10,6 +10,9 @@ import {
   computePortfolioValuationSummary,
   type PortfolioValuationSummary,
   type ValuationPriceStatus,
+  computeConfigFingerprint,
+  configFingerprintsMatch,
+  deepFreezeConfig,
 } from "../../../shared/types/portfolioValuation";
 import { readConcentrationThresholdOverrides } from "../config/concentrationThresholds";
 import {
@@ -201,11 +204,21 @@ export class PortfolioService {
 
   /**
    * Computes valuation completeness, unpriced holdings count, and fair yield metrics (#1660).
+   * Also computes a config fingerprint for stale snapshot detection (#1862).
+   * The fingerprint is derived from the canonical serialization of the configuration
+   * that produced the valuation. If the configuration changes, the fingerprint
+   * will differ, allowing callers to detect stale work.
+   *
+   * @param config Optional configuration object to fingerprint. When provided,
+   * the fingerprint is computed and attached to the summary. Callers should
+   * compare this fingerprint with the current configuration before reusing
+   * cached valuation results.
    */
   public static computeValuationSummary(
     positions: VaultPosition[],
+    config?: unknown,
   ): PortfolioValuationSummary {
-    return computePortfolioValuationSummary(
+    const summary = computePortfolioValuationSummary(
       positions.map((p) => ({
         protocol: p.protocol,
         asset: p.asset,
@@ -216,6 +229,18 @@ export class PortfolioService {
         priceStatus: p.priceStatus,
       })),
     );
+
+    // Compute config fingerprint for stale snapshot detection (#1862)
+    let configFingerprint: string | undefined;
+    if (config !== undefined) {
+      configFingerprint = computeConfigFingerprint(deepFreezeConfig(config));
+    }
+
+    // Attach fingerprint to the summary for caller-side freshness checking
+    // @ts-expect-error - adding optional field for fingerprint tracking
+    summary.configFingerprint = configFingerprint;
+
+    return summary;
   }
 
   private static getStrategyForProtocol(protocol: string): string {
